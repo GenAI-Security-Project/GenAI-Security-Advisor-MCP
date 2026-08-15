@@ -40,7 +40,10 @@ interface TreeEntry {
   size?: number;
 }
 
-const CACHE_TTL_SECONDS = 3600;
+// Balances corpus-update propagation speed against GitHub's unauthenticated
+// 60 req/hour rate limit (per source IP; Workers' egress IPs vary by colo,
+// so this is comfortably inside budget even at low-to-moderate traffic).
+const CACHE_TTL_SECONDS = 300;
 // Text formats we'll read the actual bytes of and hand back as tool content.
 // PDFs/spreadsheets are intentionally excluded -- see get_resource's notes
 // field for why, and how an agent should fetch those instead.

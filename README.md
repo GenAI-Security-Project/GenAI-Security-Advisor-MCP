@@ -23,7 +23,7 @@ an agent that doesn't, reachable at a public URL with no local install.
   [`GenAI-Security-Advisor`](https://github.com/GenAI-Security-Project/GenAI-Security-Advisor)'s
   `corpus/MANIFEST.yaml` and files live from GitHub at request time (via
   `raw.githubusercontent.com` and the Git Trees API), through Cloudflare's
-  edge Cache API (1 hour TTL). The two repos can never drift out of sync --
+  edge Cache API (5 min TTL). The two repos can never drift out of sync --
   there's nothing to re-sync.
 
 This means GitHub Pages/Codespaces were deliberately **not** used for the
@@ -117,8 +117,8 @@ Worker custom domain in the dashboard after the first deploy.
 ### Optional: raise the GitHub rate limit
 
 Unauthenticated GitHub requests are capped at 60/hour per source IP, but
-edge caching (1 hour TTL) means most traffic never re-hits GitHub after the
-first request of each hour. If you outgrow that anyway, add a read-only
+edge caching (5 min TTL) means most traffic never re-hits GitHub after the
+first request in that window. If you outgrow that anyway, add a read-only
 personal access token (no scopes needed for public repos):
 
 ```bash
