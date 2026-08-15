@@ -1,0 +1,287 @@
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+import {
+  Env,
+  ManifestResource,
+  fetchRawFile,
+  filesUnderPath,
+  getManifest,
+  getTree,
+  isReadablePath,
+  isSafeCorpusPath,
+  rawUrl,
+} from "./corpus.js";
+
+const STATUS_VALUES = ["current", "draft", "superseded", "linked"] as const;
+const MAX_SEARCH_MATCHES = 20;
+const SNIPPET_RADIUS = 160;
+
+function json(data: unknown) {
+  return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+}
+
+function errorResult(message: string) {
+  return { content: [{ type: "text" as const, text: message }], isError: true };
+}
+
+function resourceSummary(r: ManifestResource) {
+  return {
+    id: r.id,
+    title: r.title,
+    initiative: r.initiative,
+    version: r.version,
+    status: r.status,
+    format: r.format,
+    license: r.license,
+    notes: r.notes,
+  };
+}
+
+export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
+  const server = new McpServer(
+    {
+      name: "genai-security-advisor-mcp",
+      version: "0.1.0",
+    },
+    {
+      instructions:
+        "Browses the OWASP GenAI Security Project's curated corpus (companion to the " +
+        "genai-security-advisor skill). All content is read live from the " +
+        `${env.SOURCE_REPO} GitHub repo at query time, edge-cached for up to an hour. ` +
+        "Start with list_resources or list_initiatives, then get_resource for a specific " +
+        "document's metadata and file list, get_file to read a specific text file's " +
+        "contents, or search_corpus for a keyword search across markdown/JSON resources. " +
+        "PDFs and spreadsheets are not text-extracted here -- get_resource returns a " +
+        "raw_url for those so you can fetch and read them directly. " +
+        "Vendored content is third-party (mostly CC BY-SA 4.0, see each resource's " +
+        "license field) -- this server's own code is Apache-2.0, but that grant does not " +
+        "extend to the corpus content it serves.",
+    },
+  );
+
+  server.registerTool(
+    "list_resources",
+    {
+      title: "List corpus resources",
+      description:
+        "List catalog entries from the corpus MANIFEST, optionally filtered by status " +
+        "(defaults to 'current' -- the only status most questions should use), initiative, " +
+        "or format. Returns metadata only, not content -- use get_resource for a specific " +
+        "entry's detail.",
+      inputSchema: {
+        status: z
+          .enum(STATUS_VALUES)
+          .optional()
+          .describe("Defaults to 'current'. Pass 'all' via omitting this filter only if you explicitly need draft/superseded/linked entries too -- otherwise leave unset."),
+        initiative: z
+          .string()
+          .optional()
+          .describe("e.g. 'llm-top10', 'agentic-top10', 'data-security', 'mcp-security', 'red-teaming', 'governance', 'incident-response'"),
+        format: z.string().optional().describe("e.g. 'markdown', 'pdf', 'json', 'mixed'"),
+      },
+    },
+    async ({ status, initiative, format }) => {
+      const manifest = await getManifest(env, ctx);
+      let resources = manifest.resources;
+      resources = resources.filter((r) => r.status === (status ?? "current"));
+      if (initiative) resources = resources.filter((r) => r.initiative === initiative);
+      if (format) resources = resources.filter((r) => r.format === format);
+      return json({ count: resources.length, resources: resources.map(resourceSummary) });
+    },
+  );
+
+  server.registerTool(
+    "list_initiatives",
+    {
+      title: "List corpus initiatives",
+      description:
+        "List the distinct initiative categories in the corpus (llm-top10, agentic-top10, " +
+        "data-security, mcp-security, red-teaming, governance, incident-response) with a " +
+        "count of current resources in each. Use this to orient before drilling into " +
+        "list_resources with a specific initiative filter.",
+      inputSchema: {},
+    },
+    async () => {
+      const manifest = await getManifest(env, ctx);
+      const counts = new Map<string, { current: number; total: number }>();
+      for (const r of manifest.resources) {
+        const c = counts.get(r.initiative) ?? { current: 0, total: 0 };
+        c.total += 1;
+        if (r.status === "current") c.current += 1;
+        counts.set(r.initiative, c);
+      }
+      return json(
+        Array.from(counts.entries())
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([initiative, c]) => ({ initiative, ...c })),
+      );
+    },
+  );
+
+  server.registerTool(
+    "get_resource",
+    {
+      title: "Get a resource's metadata and files",
+      description:
+        "Look up one MANIFEST entry by id (from list_resources) and return its full " +
+        "metadata. For markdown/json resources, also lists the underlying file(s) with a " +
+        "raw_url for each -- use get_file to read a specific one. For pdf/mixed resources, " +
+        "returns a raw_url to fetch the binary directly (not text-extracted here). For " +
+        "status:'linked' resources, there is no vendored copy -- only source_url is " +
+        "returned, and you should fetch that directly and say plainly it's live content, " +
+        "not vendored.",
+      inputSchema: {
+        id: z.string().describe("Resource id, e.g. 'llm-top10-2026' (see list_resources)"),
+      },
+    },
+    async ({ id }) => {
+      const manifest = await getManifest(env, ctx);
+      const resource = manifest.resources.find((r) => r.id === id);
+      if (!resource) {
+        return errorResult(
+          `No resource with id '${id}'. Call list_resources to see valid ids.`,
+        );
+      }
+
+      if (resource.status === "linked" || !resource.path) {
+        return json({
+          ...resourceSummary(resource),
+          vendored: false,
+          source_url: resource.source_url,
+          source_repo: resource.source_repo,
+        });
+      }
+
+      const tree = await getTree(env, ctx);
+      const files = filesUnderPath(resource.path, tree);
+      return json({
+        ...resourceSummary(resource),
+        vendored: true,
+        files: files.map((path) => ({
+          path,
+          raw_url: rawUrl(path, env),
+          readable_via_get_file: isReadablePath(path),
+        })),
+      });
+    },
+  );
+
+  server.registerTool(
+    "get_file",
+    {
+      title: "Read a corpus text file",
+      description:
+        "Read the raw text content of one file under corpus/ (markdown, yaml, json, or " +
+        "txt only -- PDFs and spreadsheets aren't supported here, use the raw_url from " +
+        "get_resource instead). The path must be one returned by get_resource's files " +
+        "list.",
+      inputSchema: {
+        path: z.string().describe("A repo-relative path under corpus/, e.g. 'corpus/llm-top10/2026/LLM01_PromptInjection.md'"),
+      },
+    },
+    async ({ path }) => {
+      if (!isSafeCorpusPath(path)) {
+        return errorResult("Invalid path: must be a repo-relative path under corpus/ with no '..' segments.");
+      }
+      if (!isReadablePath(path)) {
+        return errorResult(
+          "This file type isn't readable via get_file (only .md/.yaml/.yml/.json/.txt). " +
+            "Use get_resource to find its raw_url and fetch it directly.",
+        );
+      }
+      const tree = await getTree(env, ctx);
+      const exists = tree.some((e) => e.type === "blob" && e.path === path);
+      if (!exists) {
+        return errorResult(`'${path}' was not found in ${env.SOURCE_REPO}@${env.SOURCE_REF}.`);
+      }
+      const text = await fetchRawFile(path, env, ctx);
+      return { content: [{ type: "text" as const, text }] };
+    },
+  );
+
+  server.registerTool(
+    "search_corpus",
+    {
+      title: "Search the corpus",
+      description:
+        "Case-insensitive substring search across vendored markdown/json resources' text " +
+        "content, plus every resource's title/notes (including PDF-format ones, by " +
+        "metadata only -- PDF bodies are not indexed since this server doesn't extract " +
+        "PDF text). Returns matches with a short snippet. For a thorough read of a PDF " +
+        "resource, use get_resource to get its raw_url and fetch it directly instead.",
+      inputSchema: {
+        query: z.string().min(2).describe("Search term, case-insensitive substring match"),
+        status: z
+          .enum(STATUS_VALUES)
+          .optional()
+          .describe("Defaults to 'current'"),
+      },
+    },
+    async ({ query, status }) => {
+      const manifest = await getManifest(env, ctx);
+      const needle = query.toLowerCase();
+      const targetStatus = status ?? "current";
+      const resources = manifest.resources.filter((r) => r.status === targetStatus);
+
+      const matches: Array<{
+        resource_id: string;
+        title: string;
+        file?: string;
+        field: string;
+        snippet: string;
+      }> = [];
+
+      const tree = await getTree(env, ctx);
+
+      for (const r of resources) {
+        if (matches.length >= MAX_SEARCH_MATCHES) break;
+
+        const metaText = `${r.title}\n${r.notes ?? ""}`;
+        const metaIdx = metaText.toLowerCase().indexOf(needle);
+        if (metaIdx !== -1) {
+          matches.push({
+            resource_id: r.id,
+            title: r.title,
+            field: "title/notes",
+            snippet: snippetAround(metaText, metaIdx, needle.length),
+          });
+        }
+
+        if (!r.path || (r.format !== "markdown" && r.format !== "json")) continue;
+
+        const files = filesUnderPath(r.path, tree).filter(isReadablePath);
+        for (const file of files) {
+          if (matches.length >= MAX_SEARCH_MATCHES) break;
+          let text: string;
+          try {
+            text = await fetchRawFile(file, env, ctx);
+          } catch {
+            continue;
+          }
+          const idx = text.toLowerCase().indexOf(needle);
+          if (idx !== -1) {
+            matches.push({
+              resource_id: r.id,
+              title: r.title,
+              file,
+              field: "content",
+              snippet: snippetAround(text, idx, needle.length),
+            });
+          }
+        }
+      }
+
+      return json({ query, status: targetStatus, count: matches.length, matches });
+    },
+  );
+
+  return server;
+}
+
+function snippetAround(text: string, index: number, matchLength: number): string {
+  const start = Math.max(0, index - SNIPPET_RADIUS);
+  const end = Math.min(text.length, index + matchLength + SNIPPET_RADIUS);
+  const prefix = start > 0 ? "…" : "";
+  const suffix = end < text.length ? "…" : "";
+  return prefix + text.slice(start, end).replace(/\s+/g, " ").trim() + suffix;
+}

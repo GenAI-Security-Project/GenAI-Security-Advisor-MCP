@@ -1,0 +1,25 @@
+{
+  "name": "genai-security-advisor-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Remote MCP server exposing the OWASP GenAI Security Project's curated corpus (companion to the genai-security-advisor skill).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "dry-run": "wrangler deploy --dry-run --outdir dist"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.0.0",
+    "@types/js-yaml": "^4.0.9",
+    "typescript": "^5.6.0",
+    "wrangler": "^4.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "js-yaml": "^4.1.0",
+    "zod": "^3.25.76"
+  }
+}

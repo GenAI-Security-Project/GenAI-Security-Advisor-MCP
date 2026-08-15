@@ -1,0 +1,148 @@
+// Live access to the GenAI-Security-Advisor corpus on GitHub.
+//
+// Nothing here is vendored into this repo -- every read goes to GitHub at
+// request time (through the Cache API) so this server always reflects the
+// upstream corpus without a manual re-sync step.
+
+import yaml from "js-yaml";
+
+export interface Env {
+  SOURCE_REPO: string; // "GenAI-Security-Project/GenAI-Security-Advisor"
+  SOURCE_REF: string; // "main"
+  GITHUB_TOKEN?: string; // optional read-only PAT to raise GitHub's rate limit
+}
+
+export interface ManifestResource {
+  id: string;
+  title: string;
+  initiative: string;
+  version: string;
+  status: "current" | "draft" | "superseded" | "linked";
+  format: string;
+  license: string;
+  path?: string | null;
+  source_repo?: string;
+  source_path?: string;
+  source_url?: string;
+  vendored_commit?: string;
+  vendored_date?: string;
+  published?: string | null;
+  notes?: string;
+}
+
+interface Manifest {
+  resources: ManifestResource[];
+}
+
+interface TreeEntry {
+  path: string;
+  type: "blob" | "tree";
+  size?: number;
+}
+
+const CACHE_TTL_SECONDS = 3600;
+// Text formats we'll read the actual bytes of and hand back as tool content.
+// PDFs/spreadsheets are intentionally excluded -- see get_resource's notes
+// field for why, and how an agent should fetch those instead.
+const READABLE_EXTENSIONS = [".md", ".yaml", ".yml", ".json", ".txt"];
+
+function ghHeaders(env: Env, accept: string): HeadersInit {
+  const headers: Record<string, string> = {
+    "User-Agent": "genai-security-advisor-mcp",
+    Accept: accept,
+  };
+  if (env.GITHUB_TOKEN) headers.Authorization = `Bearer ${env.GITHUB_TOKEN}`;
+  return headers;
+}
+
+async function cachedFetch(
+  url: string,
+  init: RequestInit,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const cache = caches.default;
+  // Cache API keys on the request URL + method; GitHub URLs are stable per
+  // SOURCE_REF, so a plain GET cache key is enough.
+  const cacheKey = new Request(url, { method: "GET" });
+  const hit = await cache.match(cacheKey);
+  if (hit) return hit;
+
+  const resp = await fetch(url, init);
+  if (resp.ok) {
+    const toCache = new Response(resp.body, resp);
+    toCache.headers.set("Cache-Control", `public, max-age=${CACHE_TTL_SECONDS}`);
+    ctx.waitUntil(cache.put(cacheKey, toCache.clone()));
+    return toCache;
+  }
+  return resp;
+}
+
+export async function getManifest(env: Env, ctx: ExecutionContext): Promise<Manifest> {
+  const url = `https://raw.githubusercontent.com/${env.SOURCE_REPO}/${env.SOURCE_REF}/corpus/MANIFEST.yaml`;
+  const resp = await cachedFetch(url, { headers: ghHeaders(env, "text/plain") }, ctx);
+  if (!resp.ok) {
+    throw new Error(`Failed to fetch MANIFEST.yaml: ${resp.status} ${resp.statusText}`);
+  }
+  const text = await resp.text();
+  const data = yaml.load(text) as Manifest;
+  if (!data || !Array.isArray(data.resources)) {
+    throw new Error("MANIFEST.yaml did not parse to the expected { resources: [...] } shape");
+  }
+  return data;
+}
+
+// Full recursive file listing of the source repo, used both to list a
+// resource's directory and to validate get_file requests (a path is only
+// readable if it's actually in this tree -- prevents path traversal /
+// fetching arbitrary paths outside corpus/).
+export async function getTree(env: Env, ctx: ExecutionContext): Promise<TreeEntry[]> {
+  const url = `https://api.github.com/repos/${env.SOURCE_REPO}/git/trees/${env.SOURCE_REF}?recursive=1`;
+  const resp = await cachedFetch(url, { headers: ghHeaders(env, "application/vnd.github+json") }, ctx);
+  if (!resp.ok) {
+    throw new Error(`Failed to fetch repo tree: ${resp.status} ${resp.statusText}`);
+  }
+  const data = (await resp.json()) as { tree: TreeEntry[]; truncated?: boolean };
+  return data.tree;
+}
+
+export function isReadablePath(path: string): boolean {
+  return READABLE_EXTENSIONS.some((ext) => path.toLowerCase().endsWith(ext));
+}
+
+// Rejects anything that isn't a plain, forward-relative path under corpus/.
+// No "..", no absolute paths, no protocol-relative tricks.
+export function isSafeCorpusPath(path: string): boolean {
+  if (!path.startsWith("corpus/")) return false;
+  if (path.includes("..")) return false;
+  if (path.startsWith("/") || path.includes("://")) return false;
+  return true;
+}
+
+export async function fetchRawFile(
+  path: string,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<string> {
+  const url = `https://raw.githubusercontent.com/${env.SOURCE_REPO}/${env.SOURCE_REF}/${path}`;
+  const resp = await cachedFetch(url, { headers: ghHeaders(env, "text/plain") }, ctx);
+  if (!resp.ok) {
+    throw new Error(`Failed to fetch ${path}: ${resp.status} ${resp.statusText}`);
+  }
+  return resp.text();
+}
+
+// Files contained under a resource's manifest `path`. For a single-file
+// resource this is just [path] itself; for a directory-shaped path
+// (trailing "/") it's every blob in the tree under that prefix.
+export function filesUnderPath(path: string, tree: TreeEntry[]): string[] {
+  if (!path.endsWith("/")) return [path];
+  const prefix = path;
+  return tree
+    .filter((e) => e.type === "blob" && e.path.startsWith(prefix))
+    .map((e) => e.path)
+    .sort();
+}
+
+export function rawUrl(path: string, env: Env): string {
+  return `https://raw.githubusercontent.com/${env.SOURCE_REPO}/${env.SOURCE_REF}/${path}`;
+}

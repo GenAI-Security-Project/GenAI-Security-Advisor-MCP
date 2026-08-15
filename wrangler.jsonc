@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "genai-security-advisor-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-09-01",
+  "observability": {
+    "enabled": true
+  },
+  // No bindings (no KV/D1/Durable Objects) -- this server is stateless and
+  // uses only the Cache API, which needs no binding. See README for why.
+  "vars": {
+    "SOURCE_REPO": "GenAI-Security-Project/GenAI-Security-Advisor",
+    "SOURCE_REF": "main"
+  }
+}
