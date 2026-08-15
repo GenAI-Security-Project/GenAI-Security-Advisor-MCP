@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GenAI Security Advisor MCP — OWASP GenAI Security Project</title>
+<meta name="description" content="A remote MCP server that lets any MCP-capable agent browse and search the OWASP GenAI Security Project's curated corpus over HTTP. Companion to the genai-security-advisor skill.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --blue:#0798FF;
+    --blue-2:#1683FD;
+    --navy:#001A3D;
+    --teal:#4D98A0;
+    --purple:#7a56ff;
+    --amber:#AE7811;
+
+    --bg:#ffffff;
+    --bg-soft:#F5F8FF;
+    --bg-tint:#E3EBFF;
+    --card:#ffffff;
+    --border:#E3E3E3;
+    --text:#222222;
+    --text-dim:#525a66;
+    --navy-text:#001A3D;
+    --hero-bg:linear-gradient(135deg,#001A3D 0%,#0b2a5c 55%,#0798FF 130%);
+    --hero-text:#ffffff;
+    --hero-text-dim:#c9dcf5;
+    --code-bg:#0f1b2d;
+    --code-text:#dce8f7;
+    --shadow: 0 1px 2px rgba(0,26,61,0.06), 0 8px 24px rgba(0,26,61,0.06);
+  }
+
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0b1220;
+      --bg-soft:#0f1a2e;
+      --bg-tint:#12213a;
+      --card:#101c33;
+      --border:#20304d;
+      --text:#e8eefc;
+      --text-dim:#a9b8d1;
+      --navy-text:#dbe7fb;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.35);
+    }
+    .pill-live{ color:#8fd0d6; }
+    .pill-caution{ color:#e2b25a; }
+  }
+
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--text);
+    font-family:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--blue-2)}
+  a:hover{text-decoration-thickness:2px}
+  code, .mono{font-family:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;font-size:.92em}
+
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+
+  .preview-banner{
+    background:var(--amber);
+    color:#fff;
+    text-align:center;
+    padding:10px 20px;
+    font-size:13.5px;
+    font-weight:600;
+    letter-spacing:.01em;
+  }
+  .preview-banner strong{font-weight:800}
+
+  /* ---------- Hero ---------- */
+  .hero{
+    background:var(--hero-bg);
+    color:var(--hero-text);
+    padding:72px 0 88px;
+    position:relative;
+    overflow:hidden;
+  }
+  .hero::after{
+    content:"";
+    position:absolute; inset:0;
+    background:
+      radial-gradient(600px 300px at 85% 10%, rgba(122,86,255,0.35), transparent 60%),
+      radial-gradient(500px 260px at 10% 90%, rgba(77,152,160,0.30), transparent 60%);
+    pointer-events:none;
+  }
+  .hero .wrap{position:relative}
+  .hero .wrap > a{
+    display:inline-block;
+    margin-bottom:28px;
+  }
+  .brand-logo{
+    display:block;
+    width:180px; height:auto;
+  }
+  h1{
+    font-size:clamp(2.1rem, 4.2vw, 3.2rem);
+    line-height:1.12;
+    margin:20px 0 16px;
+    font-weight:800;
+    letter-spacing:-0.01em;
+  }
+  .lede{
+    font-size:19px;
+    color:var(--hero-text-dim);
+    max-width:640px;
+    margin:0 0 28px;
+  }
+  .badges{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:32px}
+  .badge{
+    display:inline-flex; align-items:center; gap:6px;
+    font-size:12.5px; font-weight:600;
+    padding:6px 11px; border-radius:7px;
+    background:rgba(255,255,255,0.10);
+    border:1px solid rgba(255,255,255,0.22);
+    color:#fff;
+  }
+  .badge b{font-weight:700; color:#fff}
+  .cta-row{display:flex; flex-wrap:wrap; gap:12px}
+  .btn{
+    display:inline-flex; align-items:center; gap:8px;
+    padding:12px 20px; border-radius:9px;
+    font-weight:700; font-size:15px;
+    text-decoration:none;
+    border:1px solid transparent;
+    transition:transform .12s ease, box-shadow .12s ease;
+  }
+  .btn:hover{transform:translateY(-1px)}
+  .btn-primary{background:#fff; color:var(--navy)}
+  .btn-primary:hover{box-shadow:0 8px 20px rgba(0,0,0,0.25)}
+  .btn-ghost{background:transparent; color:#fff; border-color:rgba(255,255,255,0.35)}
+
+  /* ---------- Companion callout ---------- */
+  .companion{
+    margin-top:40px;
+    padding:18px 20px;
+    border-radius:12px;
+    background:rgba(255,255,255,0.08);
+    border:1px solid rgba(255,255,255,0.22);
+    font-size:14.5px;
+    color:var(--hero-text-dim);
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+  }
+  .companion a{color:#fff; font-weight:700; text-decoration:underline}
+
+  /* ---------- Sections ---------- */
+  section{padding:64px 0}
+  section h2{
+    font-size:clamp(1.5rem, 2.6vw, 1.9rem);
+    font-weight:800;
+    color:var(--navy-text);
+    margin:0 0 10px;
+    letter-spacing:-0.01em;
+  }
+  .section-lede{color:var(--text-dim); max-width:680px; margin:0 0 36px; font-size:16px}
+  .alt{background:var(--bg-soft)}
+
+  /* tool cards */
+  .grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:18px}
+  .card{
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:14px;
+    padding:22px 22px 20px;
+    box-shadow:var(--shadow);
+  }
+  .card .num{
+    display:inline-flex; align-items:center; justify-content:center;
+    width:30px; height:30px; border-radius:8px;
+    background:var(--bg-tint); color:var(--blue-2);
+    font-weight:800; font-size:14px; margin-bottom:14px;
+  }
+  .card h3{font-size:16.5px; margin:0 0 8px; color:var(--navy-text); font-weight:700}
+  .card p{margin:0; color:var(--text-dim); font-size:14.5px}
+  .card code{font-size:13px}
+  .card .ex{
+    margin-top:12px; padding:10px 12px; border-radius:8px;
+    background:var(--bg-soft); border:1px solid var(--border);
+    font-size:13px; color:var(--text-dim);
+  }
+
+  .out-of-scope{
+    margin-top:28px; padding:16px 18px; border-radius:10px;
+    border:1px solid var(--border); background:var(--card);
+    font-size:14px; color:var(--text-dim);
+  }
+  .out-of-scope b{color:var(--text)}
+
+  /* architecture table */
+  table{width:100%; border-collapse:collapse; background:var(--card); border-radius:12px; overflow:hidden; box-shadow:var(--shadow)}
+  th,td{padding:13px 16px; text-align:left; font-size:14.5px; border-bottom:1px solid var(--border)}
+  th{background:var(--bg-tint); color:var(--navy-text); font-weight:700; font-size:13px; text-transform:uppercase; letter-spacing:.03em}
+  tr:last-child td{border-bottom:none}
+  .pill{
+    display:inline-block; padding:3px 9px; border-radius:999px;
+    font-size:12px; font-weight:700;
+  }
+  .pill-live{background:rgba(77,152,160,0.18); color:#2f6a70}
+  .pill-caution{background:rgba(174,120,17,0.16); color:var(--amber)}
+  .table-note{font-size:13.5px; color:var(--text-dim); margin-top:12px}
+  .table-scroll{overflow-x:auto}
+
+  /* connect */
+  .platform-card{
+    background:var(--card); border:1px solid var(--border); border-radius:14px;
+    padding:22px; box-shadow:var(--shadow); margin-bottom:18px;
+  }
+  .platform-card h3{
+    display:flex; align-items:center; gap:10px;
+    margin:0 0 6px; font-size:17px; color:var(--navy-text);
+  }
+  .platform-card .tag{
+    font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.03em;
+    padding:3px 8px; border-radius:6px; background:var(--bg-tint); color:var(--blue-2);
+  }
+  .platform-card p{margin:6px 0 12px; color:var(--text-dim); font-size:14.5px}
+  pre{
+    margin:0; padding:14px 16px; border-radius:9px;
+    background:var(--code-bg); color:var(--code-text);
+    overflow-x:auto; font-size:13.5px; line-height:1.55;
+  }
+  .local-note{
+    margin-top:36px; padding:18px 20px; border-radius:12px;
+    background:linear-gradient(135deg, var(--bg-tint), var(--bg-soft));
+    border:1px solid var(--border); font-size:14.5px;
+  }
+  .local-note b{color:var(--navy-text)}
+
+  /* security */
+  .sec-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:18px}
+  .sec-card{
+    background:var(--card); border:1px solid var(--border); border-radius:14px;
+    padding:20px; box-shadow:var(--shadow);
+  }
+  .sec-card h3{margin:0 0 8px; font-size:15.5px; color:var(--navy-text)}
+  .sec-card p{margin:0; color:var(--text-dim); font-size:14px}
+
+  /* licensing */
+  .lic-grid{display:grid; grid-template-columns:1fr 1fr; gap:18px}
+  @media (max-width:720px){ .lic-grid{grid-template-columns:1fr} .lic-note-row{flex-direction:column} }
+  .lic-card{
+    background:var(--card); border:1px solid var(--border); border-radius:14px;
+    padding:22px; box-shadow:var(--shadow);
+  }
+  .lic-card .chip{
+    display:inline-block; font-weight:800; font-size:13px;
+    padding:5px 11px; border-radius:7px; margin-bottom:12px;
+  }
+  .chip-apache{background:rgba(7,152,255,0.14); color:var(--blue-2)}
+  .chip-ccbysa{background:rgba(122,86,255,0.14); color:var(--purple)}
+  .lic-card ul{margin:10px 0 0; padding-left:20px; color:var(--text-dim); font-size:14px}
+  .lic-card li{margin-bottom:6px}
+  .lic-note-row{display:flex; gap:16px; margin-top:18px}
+  .lic-note{
+    flex:1; padding:14px 16px; border-radius:10px; font-size:13.5px;
+    background:var(--bg-soft); border:1px solid var(--border); color:var(--text-dim);
+  }
+
+  footer{
+    padding:44px 0 56px; border-top:1px solid var(--border);
+    font-size:13.5px; color:var(--text-dim);
+  }
+  footer .foot-row{display:flex; flex-wrap:wrap; justify-content:space-between; gap:20px; align-items:flex-start}
+  footer a{color:var(--text-dim)}
+  footer a:hover{color:var(--blue-2)}
+  footer .links{display:flex; flex-wrap:wrap; gap:16px}
+  footer .credit b{color:var(--text)}
+</style>
+</head>
+<body>
+
+<div class="preview-banner">⚠️ <strong>Preview Release</strong> — for Testing and Feedback</div>
+
+<header class="hero">
+  <div class="wrap">
+    <a href="https://genai.owasp.org" aria-label="OWASP GenAI Security Project — genai.owasp.org">
+      <img class="brand-logo" src="assets/genai-security-project-logo.png" alt="OWASP GenAI Security Project" width="220" height="78">
+    </a>
+    <h1>GenAI Security Advisor — MCP Server</h1>
+    <p class="lede">A remote Model Context Protocol server that lets any MCP-capable agent browse, read, and search the OWASP GenAI Security Project's curated corpus over HTTP — no local checkout required.</p>
+    <div class="badges">
+      <span class="badge">🏷️ <b>v0.1.0</b></span>
+      <span class="badge">⚖️ Apache-2.0 (server) + CC BY-SA 4.0 (corpus)</span>
+      <span class="badge">🌐 Public, no auth required</span>
+      <span class="badge">☁️ Cloudflare Workers, free tier</span>
+      <span class="badge">🛠️ 5 tools</span>
+    </div>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="https://github.com/GenAI-Security-Project/GenAI-Security-Advisor-MCP">View on GitHub →</a>
+      <a class="btn btn-ghost" href="#connect">Connect a client</a>
+    </div>
+    <div class="companion">
+      🔗 Companion to the <a href="https://genai-security-project.github.io/GenAI-Security-Advisor/">genai-security-advisor skill</a> — same corpus, different access pattern. Use the skill inside a local checkout; use this server from anywhere over HTTP.
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <h2>What it does</h2>
+    <p class="section-lede">Five read-only tools, all backed by the same <code>corpus/MANIFEST.yaml</code> the skill itself reads — fetched live from GitHub at request time, so the two are never out of sync.</p>
+    <div class="grid">
+      <div class="card">
+        <span class="num">1</span>
+        <h3><code>list_resources</code></h3>
+        <p>Catalog entries filtered by status, initiative, or format.</p>
+      </div>
+      <div class="card">
+        <span class="num">2</span>
+        <h3><code>list_initiatives</code></h3>
+        <p>Category overview with current/total resource counts — a good starting point before drilling in.</p>
+      </div>
+      <div class="card">
+        <span class="num">3</span>
+        <h3><code>get_resource</code></h3>
+        <p>One resource's full metadata, file list, and a <code>raw_url</code> per file — or a <code>source_url</code> for entries with no vendored copy.</p>
+      </div>
+      <div class="card">
+        <span class="num">4</span>
+        <h3><code>get_file</code></h3>
+        <p>Read a specific text file's content directly (<code>.md</code>/<code>.yaml</code>/<code>.yml</code>/<code>.json</code>/<code>.txt</code>).</p>
+      </div>
+      <div class="card">
+        <span class="num">5</span>
+        <h3><code>search_corpus</code></h3>
+        <p>Full-text search across markdown/json content, extracted PDF text, and every resource's title/notes.</p>
+        <div class="ex">PDF matches are clearly flagged as an unreviewed offline extraction — never presented as citable.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="alt">
+  <div class="wrap">
+    <h2>Architecture</h2>
+    <p class="section-lede">Built to need nothing beyond GitHub (for the corpus) and Cloudflare's free tier (to serve it) — no database, no queue, no server to patch.</p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Piece</th><th>How</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Hosting</td><td>Cloudflare Workers, plain free tier — no Durable Objects, KV, or D1</td></tr>
+          <tr><td>Protocol</td><td>MCP over Streamable HTTP, stateless (no session tracking, no Durable Object required)</td></tr>
+          <tr><td>Corpus data</td><td>Nothing vendored here — every call reads <code>GenAI-Security-Advisor</code>'s <code>corpus/MANIFEST.yaml</code> and files live from GitHub, edge-cached 5 minutes</td></tr>
+          <tr><td>PDF search</td><td>Text extracted offline in the source repo (<code>corpus/_extracted/</code>, via a scheduled GitHub Action) — Workers' free-tier 10ms CPU budget can't parse a 100-page PDF live <span class="pill pill-caution">unreviewed</span></td></tr>
+          <tr><td>Auth</td><td>None — the corpus is already public. CORS is open for any client.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="table-note">Full design rationale, including why GitHub Pages/Codespaces were ruled out for the serving layer, is in the <a href="https://github.com/GenAI-Security-Project/GenAI-Security-Advisor-MCP#readme">repo README</a>.</p>
+  </div>
+</section>
+
+<section id="connect">
+  <div class="wrap">
+    <h2>Connecting a client</h2>
+    <p class="section-lede">Point any Streamable-HTTP-capable MCP client at the endpoint below. No installation, no API key.</p>
+
+    <div class="platform-card">
+      <h3>Claude Code <span class="tag">CLI</span></h3>
+      <pre>claude mcp add --transport http genai-security-advisor \
+  https://genai-security-advisor-mcp.genai-security-advisor-mcp.workers.dev/mcp</pre>
+    </div>
+
+    <div class="platform-card">
+      <h3>Any MCP client <span class="tag">raw endpoint</span></h3>
+      <p>Streamable HTTP, JSON-RPC 2.0, stateless — one POST per call:</p>
+      <pre>curl -X POST https://genai-security-advisor-mcp.genai-security-advisor-mcp.workers.dev/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'</pre>
+    </div>
+
+    <div class="local-note">
+      <b>Prefer working from a local checkout instead?</b> That's exactly what the companion <a href="https://genai-security-project.github.io/GenAI-Security-Advisor/">genai-security-advisor skill</a> is for — same corpus, read directly off disk inside a clone of <a href="https://github.com/GenAI-Security-Project/GenAI-Security-Advisor">GenAI-Security-Advisor</a>, no network round-trip per query.
+    </div>
+  </div>
+</section>
+
+<section class="alt">
+  <div class="wrap">
+    <h2>Security model</h2>
+    <p class="section-lede">Public, read-only, and deliberately narrow in what it will fetch.</p>
+    <div class="sec-grid">
+      <div class="sec-card">
+        <h3>Read-only</h3>
+        <p>No tool can write to GitHub or anywhere else. The server holds no write credentials at all.</p>
+      </div>
+      <div class="sec-card">
+        <h3>No auth needed</h3>
+        <p>The corpus is already public CC BY-SA 4.0 / OWASP-published content — nothing here is a secret worth gating.</p>
+      </div>
+      <div class="sec-card">
+        <h3>Path-traversal safe</h3>
+        <p><code>get_file</code> validates every path against both a syntactic allowlist and the source repo's actual file tree before fetching.</p>
+      </div>
+      <div class="sec-card">
+        <h3>No secrets committed</h3>
+        <p>An optional read-only GitHub token (to raise rate limits) is set via <code>wrangler secret put</code>, never in the repo.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Licensing</h2>
+    <p class="section-lede">Same split as the skill — check <code>corpus/MANIFEST.yaml</code> for the license of any specific document before redistributing it.</p>
+    <div class="lic-grid">
+      <div class="lic-card">
+        <span class="chip chip-apache">Apache-2.0</span>
+        <p>Covers this server's own code and documentation (this page included).</p>
+        <ul>
+          <li>Free to use, modify, and redistribute</li>
+          <li>See <a href="https://github.com/GenAI-Security-Project/GenAI-Security-Advisor-MCP/blob/main/LICENSE">LICENSE</a> in the repo</li>
+        </ul>
+      </div>
+      <div class="lic-card">
+        <span class="chip chip-ccbysa">CC BY-SA 4.0</span>
+        <p>Covers the corpus content this server reads and returns — third-party OWASP GenAI Security Project research, not covered by this repo's Apache-2.0 grant.</p>
+        <ul>
+          <li>See each resource's <code>license</code> field via <code>list_resources</code> / <code>get_resource</code></li>
+          <li>Share and adapt freely, with attribution, share-alike</li>
+        </ul>
+      </div>
+    </div>
+    <div class="lic-note-row">
+      <div class="lic-note"><b>Nothing is vendored here.</b> This repo contains only server code — the corpus itself lives in, and is licensed per, <a href="https://github.com/GenAI-Security-Project/GenAI-Security-Advisor">GenAI-Security-Advisor</a>.</div>
+      <div class="lic-note"><b>PDF extractions are not a separate license grant.</b> The offline text extractions used for search inherit their source PDF's license but are explicitly unreviewed and not citable — see <code>corpus/_extracted/README.md</code> in the source repo.</div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-row">
+      <div class="credit">
+        <div><b>Author:</b> Scott Clinton</div>
+        <div><b>Organization:</b> OWASP GenAI Security Project</div>
+      </div>
+      <div class="links">
+        <a href="https://github.com/GenAI-Security-Project/GenAI-Security-Advisor-MCP">Repository</a>
+        <a href="https://genai-security-advisor-mcp.genai-security-advisor-mcp.workers.dev/">Live server</a>
+        <a href="https://genai-security-project.github.io/GenAI-Security-Advisor/">Companion skill</a>
+        <a href="https://github.com/GenAI-Security-Project/GenAI-Security-Advisor">Corpus source</a>
+        <a href="https://genai.owasp.org">genai.owasp.org</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
