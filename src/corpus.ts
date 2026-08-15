@@ -146,3 +146,14 @@ export function filesUnderPath(path: string, tree: TreeEntry[]): string[] {
 export function rawUrl(path: string, env: Env): string {
   return `https://raw.githubusercontent.com/${env.SOURCE_REPO}/${env.SOURCE_REF}/${path}`;
 }
+
+// Mirrors scripts/extract_pdf_text.py's naming convention in the source repo:
+// corpus/foo/bar.pdf -> corpus/_extracted/foo/bar.pdf.txt
+// These sidecars are an unreviewed, offline-generated search index (PDF
+// parsing is far too CPU-heavy for a 10ms-per-request Workers free plan) --
+// never present them as the citable source, only as search-index content.
+export function extractedTextPath(pdfPath: string): string | null {
+  if (!pdfPath.startsWith("corpus/") || !pdfPath.toLowerCase().endsWith(".pdf")) return null;
+  const rest = pdfPath.slice("corpus/".length);
+  return `corpus/_extracted/${rest}.txt`;
+}

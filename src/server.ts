@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   Env,
   ManifestResource,
+  extractedTextPath,
   fetchRawFile,
   filesUnderPath,
   getManifest,
@@ -126,10 +127,13 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
         "Look up one MANIFEST entry by id (from list_resources) and return its full " +
         "metadata. For markdown/json resources, also lists the underlying file(s) with a " +
         "raw_url for each -- use get_file to read a specific one. For pdf/mixed resources, " +
-        "returns a raw_url to fetch the binary directly (not text-extracted here). For " +
-        "status:'linked' resources, there is no vendored copy -- only source_url is " +
-        "returned, and you should fetch that directly and say plainly it's live content, " +
-        "not vendored.",
+        "returns a raw_url to fetch the binary directly, plus (when available) a " +
+        "text_extract_url -- an unreviewed, offline OCR/text-extraction sidecar meant only " +
+        "for quick skimming or search, never for precise quoting (tables/layout don't " +
+        "survive extraction reliably; always fall back to raw_url for anything that needs " +
+        "to be accurate). For status:'linked' resources, there is no vendored copy -- only " +
+        "source_url is returned, and you should fetch that directly and say plainly it's " +
+        "live content, not vendored.",
       inputSchema: {
         id: z.string().describe("Resource id, e.g. 'llm-top10-2026' (see list_resources)"),
       },
@@ -154,14 +158,24 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
 
       const tree = await getTree(env, ctx);
       const files = filesUnderPath(resource.path, tree);
+      const treePaths = new Set(tree.filter((e) => e.type === "blob").map((e) => e.path));
       return json({
         ...resourceSummary(resource),
         vendored: true,
-        files: files.map((path) => ({
-          path,
-          raw_url: rawUrl(path, env),
-          readable_via_get_file: isReadablePath(path),
-        })),
+        files: files.map((path) => {
+          const extractedPath = extractedTextPath(path);
+          const hasExtract = extractedPath !== null && treePaths.has(extractedPath);
+          return {
+            path,
+            raw_url: rawUrl(path, env),
+            readable_via_get_file: isReadablePath(path),
+            ...(hasExtract && {
+              text_extract_url: rawUrl(extractedPath as string, env),
+              text_extract_warning:
+                "Unreviewed automated extraction for search/skimming only -- not citable, use raw_url for anything that needs to be accurate.",
+            }),
+          };
+        }),
       });
     },
   );
@@ -204,11 +218,12 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
     {
       title: "Search the corpus",
       description:
-        "Case-insensitive substring search across vendored markdown/json resources' text " +
-        "content, plus every resource's title/notes (including PDF-format ones, by " +
-        "metadata only -- PDF bodies are not indexed since this server doesn't extract " +
-        "PDF text). Returns matches with a short snippet. For a thorough read of a PDF " +
-        "resource, use get_resource to get its raw_url and fetch it directly instead.",
+        "Case-insensitive substring search across vendored markdown/json content, " +
+        "unreviewed offline text extractions of PDF content (see the warning field on " +
+        "those matches -- don't quote them, they're for locating the right document), and " +
+        "every resource's title/notes. Returns matches with a short snippet. For a " +
+        "thorough or precise read of a PDF resource, use get_resource to get its raw_url " +
+        "and fetch it directly instead.",
       inputSchema: {
         query: z.string().min(2).describe("Search term, case-insensitive substring match"),
         status: z
@@ -229,9 +244,13 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
         file?: string;
         field: string;
         snippet: string;
+        warning?: string;
       }> = [];
 
       const tree = await getTree(env, ctx);
+      const treePaths = new Set(tree.filter((e) => e.type === "blob").map((e) => e.path));
+      const EXTRACT_WARNING =
+        "From an unreviewed automated PDF text extraction -- for locating the right document only, do not quote; fetch the source PDF via get_resource for accurate text.";
 
       for (const r of resources) {
         if (matches.length >= MAX_SEARCH_MATCHES) break;
@@ -247,26 +266,58 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
           });
         }
 
-        if (!r.path || (r.format !== "markdown" && r.format !== "json")) continue;
+        if (!r.path) continue;
 
-        const files = filesUnderPath(r.path, tree).filter(isReadablePath);
-        for (const file of files) {
-          if (matches.length >= MAX_SEARCH_MATCHES) break;
-          let text: string;
-          try {
-            text = await fetchRawFile(file, env, ctx);
-          } catch {
-            continue;
+        // Directly readable text content (markdown/json).
+        if (r.format === "markdown" || r.format === "json") {
+          const files = filesUnderPath(r.path, tree).filter(isReadablePath);
+          for (const file of files) {
+            if (matches.length >= MAX_SEARCH_MATCHES) break;
+            let text: string;
+            try {
+              text = await fetchRawFile(file, env, ctx);
+            } catch {
+              continue;
+            }
+            const idx = text.toLowerCase().indexOf(needle);
+            if (idx !== -1) {
+              matches.push({
+                resource_id: r.id,
+                title: r.title,
+                file,
+                field: "content",
+                snippet: snippetAround(text, idx, needle.length),
+              });
+            }
           }
-          const idx = text.toLowerCase().indexOf(needle);
-          if (idx !== -1) {
-            matches.push({
-              resource_id: r.id,
-              title: r.title,
-              file,
-              field: "content",
-              snippet: snippetAround(text, idx, needle.length),
-            });
+        }
+
+        // PDF content, via its offline-extracted sidecar (if one exists).
+        if (r.format === "pdf" || r.format === "mixed") {
+          const pdfFiles = filesUnderPath(r.path, tree).filter((p) =>
+            p.toLowerCase().endsWith(".pdf"),
+          );
+          for (const pdfPath of pdfFiles) {
+            if (matches.length >= MAX_SEARCH_MATCHES) break;
+            const extractedPath = extractedTextPath(pdfPath);
+            if (!extractedPath || !treePaths.has(extractedPath)) continue;
+            let text: string;
+            try {
+              text = await fetchRawFile(extractedPath, env, ctx);
+            } catch {
+              continue;
+            }
+            const idx = text.toLowerCase().indexOf(needle);
+            if (idx !== -1) {
+              matches.push({
+                resource_id: r.id,
+                title: r.title,
+                file: pdfPath,
+                field: "content (extracted)",
+                snippet: snippetAround(text, idx, needle.length),
+                warning: EXTRACT_WARNING,
+              });
+            }
           }
         }
       }

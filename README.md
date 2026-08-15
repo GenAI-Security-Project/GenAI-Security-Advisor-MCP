@@ -41,11 +41,18 @@ URL with no infrastructure to maintain.
 | `list_initiatives` | Category overview with resource counts |
 | `get_resource` | One resource's metadata + file list (or `source_url` for `linked` entries) |
 | `get_file` | Read one text file's content (`.md`/`.yaml`/`.yml`/`.json`/`.txt` only) |
-| `search_corpus` | Case-insensitive substring search across markdown/json content + all titles/notes |
+| `search_corpus` | Case-insensitive substring search across markdown/json content, extracted PDF text, and all titles/notes |
 
-PDFs and spreadsheets are **not** text-extracted server-side -- `get_resource`
-returns a `raw_url` for those, so the calling agent fetches and reads the
-binary itself.
+Nothing is text-extracted **server-side** -- the Workers free plan caps CPU
+time at 10ms/request, far too little to parse a 50-140 page PDF live.
+Instead, the source repo's `corpus/_extracted/` holds offline-generated
+sidecar `.txt` files (via `scripts/extract_pdf_text.py` + a GitHub Action,
+regenerated whenever a corpus PDF changes) -- `search_corpus` reads those,
+and `get_resource` surfaces a `text_extract_url` alongside `raw_url` for any
+PDF that has one. These extractions are explicitly **unreviewed and not
+citable** (tables/layout don't survive `pypdf` reliably) -- every match and
+every `get_resource` entry sourced from one carries a warning saying so.
+Spreadsheets (`.xlsx`) still have no extraction at all -- `raw_url` only.
 
 ## Security model
 
