@@ -80,6 +80,11 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
           .describe("e.g. 'llm-top10', 'agentic-top10', 'data-security', 'mcp-security', 'red-teaming', 'governance', 'incident-response'"),
         format: z.string().optional().describe("e.g. 'markdown', 'pdf', 'json', 'mixed'"),
       },
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
     async ({ status, initiative, format }) => {
       const manifest = await getManifest(env, ctx);
@@ -101,6 +106,11 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
         "count of current resources in each. Use this to orient before drilling into " +
         "list_resources with a specific initiative filter.",
       inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
     async () => {
       const manifest = await getManifest(env, ctx);
@@ -136,6 +146,11 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
         "live content, not vendored.",
       inputSchema: {
         id: z.string().describe("Resource id, e.g. 'llm-top10-2026' (see list_resources)"),
+      },
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
       },
     },
     async ({ id }) => {
@@ -192,6 +207,11 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
       inputSchema: {
         path: z.string().describe("A repo-relative path under corpus/, e.g. 'corpus/llm-top10/2026/LLM01_PromptInjection.md'"),
       },
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
     async ({ path }) => {
       if (!isSafeCorpusPath(path)) {
@@ -230,6 +250,11 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
           .enum(STATUS_VALUES)
           .optional()
           .describe("Defaults to 'current'"),
+      },
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
       },
     },
     async ({ query, status }) => {
