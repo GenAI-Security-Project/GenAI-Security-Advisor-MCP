@@ -7,6 +7,7 @@ import {
   fetchRawFile,
   filesUnderPath,
   getManifest,
+  getSourceRevision,
   getTree,
   isReadablePath,
   isSafeCorpusPath,
@@ -48,7 +49,10 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
       instructions:
         "Browses the OWASP GenAI Security Project's curated corpus (companion to the " +
         "genai-security-advisor skill). All content is read live from the " +
-        `${env.SOURCE_REPO} GitHub repo at query time, edge-cached for up to an hour. ` +
+        `${env.SOURCE_REPO} GitHub repo at query time, edge-cached for up to five minutes. ` +
+        "Every result includes source_revision, the exact commit SHA of " +
+        `${env.SOURCE_REF} the answer was read from (see get_corpus_revision for ` +
+        "just the revision). " +
         "Start with list_resources or list_initiatives, then get_resource for a specific " +
         "document's metadata and file list, get_file to read a specific text file's " +
         "contents, or search_corpus for a keyword search across markdown/JSON resources. " +
@@ -87,7 +91,12 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
       resources = resources.filter((r) => r.status === (status ?? "current"));
       if (initiative) resources = resources.filter((r) => r.initiative === initiative);
       if (format) resources = resources.filter((r) => r.format === format);
-      return json({ count: resources.length, resources: resources.map(resourceSummary) });
+      const source_revision = await getSourceRevision(env, ctx);
+      return json({
+        count: resources.length,
+        resources: resources.map(resourceSummary),
+        source_revision,
+      });
     },
   );
 
@@ -148,20 +157,24 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
       }
 
       if (resource.status === "linked" || !resource.path) {
+        const source_revision = await getSourceRevision(env, ctx);
         return json({
           ...resourceSummary(resource),
           vendored: false,
           source_url: resource.source_url,
           source_repo: resource.source_repo,
+          source_revision,
         });
       }
 
       const tree = await getTree(env, ctx);
+      const source_revision = await getSourceRevision(env, ctx);
       const files = filesUnderPath(resource.path, tree);
       const treePaths = new Set(tree.filter((e) => e.type === "blob").map((e) => e.path));
       return json({
         ...resourceSummary(resource),
         vendored: true,
+        source_revision,
         files: files.map((path) => {
           const extractedPath = extractedTextPath(path);
           const hasExtract = extractedPath !== null && treePaths.has(extractedPath);
@@ -209,7 +222,11 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
         return errorResult(`'${path}' was not found in ${env.SOURCE_REPO}@${env.SOURCE_REF}.`);
       }
       const text = await fetchRawFile(path, env, ctx);
-      return { content: [{ type: "text" as const, text }] };
+      const source_revision = await getSourceRevision(env, ctx);
+      return {
+        content: [{ type: "text" as const, text }],
+        structuredContent: { source_revision },
+      };
     },
   );
 
@@ -322,7 +339,37 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
         }
       }
 
-      return json({ query, status: targetStatus, count: matches.length, matches });
+      return json({
+        query,
+        status: targetStatus,
+        count: matches.length,
+        matches,
+        source_revision: await getSourceRevision(env, ctx),
+      });
+    },
+  );
+
+  server.registerTool(
+    "get_corpus_revision",
+    {
+      title: "Get the exact corpus revision",
+      description:
+        "Return the exact commit SHA of the source repo ref (SOURCE_REF) that this server " +
+        "is currently serving answers from, with a GitHub URL for the commit. Use this to " +
+        "record which revision a claim or answer was read from, or to detect when the " +
+        "served corpus has changed between calls. Every other tool's result also carries " +
+        "the same source_revision field, so this is only needed when you want the revision " +
+        "without a resource lookup or search.",
+      inputSchema: {},
+    },
+    async () => {
+      const sha = await getSourceRevision(env, ctx);
+      return json({
+        source_repo: env.SOURCE_REPO,
+        source_ref: env.SOURCE_REF,
+        source_revision: sha,
+        commit_url: `https://github.com/${env.SOURCE_REPO}/commit/${sha}`,
+      });
     },
   );
 

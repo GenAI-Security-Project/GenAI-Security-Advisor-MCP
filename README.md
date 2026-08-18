@@ -126,6 +126,13 @@ The MCP Server provides several tools that your AI assistant can use automatical
 | `list_initiatives` | Shows available initiatives and their resources |
 | `get_resource` | Retrieves information and available files for a specific resource |
 | `get_file` | Reads supported research files |
+| `get_corpus_revision` | Returns the exact commit SHA the server is currently serving answers from |
+
+Every result that carries research content (`list_resources`, `get_resource`,
+`get_file`, `search_corpus`) includes a `source_revision` field: the exact
+commit SHA of the source repo ref the answer was read from, so a consumer can
+record which revision answered a request (and `get_corpus_revision` returns
+the same value on its own, with a commit URL).
 
 In most cases, **you do not need to invoke these tools manually**.
 

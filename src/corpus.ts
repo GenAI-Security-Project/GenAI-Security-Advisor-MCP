@@ -94,6 +94,19 @@ export async function getManifest(env: Env, ctx: ExecutionContext): Promise<Mani
   return data;
 }
 
+// Resolves SOURCE_REF to the exact commit SHA currently serving the corpus.
+// This is the citation anchor: two consumers hitting the same revision see
+// the same bytes, and an answer can name the commit it was read from.
+export async function getSourceRevision(env: Env, ctx: ExecutionContext): Promise<string> {
+  const url = `https://api.github.com/repos/${env.SOURCE_REPO}/commits/${env.SOURCE_REF}`;
+  const resp = await cachedFetch(url, { headers: ghHeaders(env, "application/vnd.github+json") }, ctx);
+  if (!resp.ok) {
+    throw new Error(`Failed to resolve ${env.SOURCE_REF}: ${resp.status} ${resp.statusText}`);
+  }
+  const data = (await resp.json()) as { sha: string };
+  return data.sha;
+}
+
 // Full recursive file listing of the source repo, used both to list a
 // resource's directory and to validate get_file requests (a path is only
 // readable if it's actually in this tree -- prevents path traversal /
