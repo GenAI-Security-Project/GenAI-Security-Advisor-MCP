@@ -49,7 +49,9 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
       instructions:
         "Browses the OWASP GenAI Security Project's curated corpus (companion to the " +
         "genai-security-advisor skill). All content is read live from the " +
-        `${env.SOURCE_REPO} GitHub repo at query time, edge-cached for up to five minutes. ` +
+        `${env.SOURCE_REPO} GitHub repo at query time. Each request resolves ` +
+        `${env.SOURCE_REF} to a commit SHA once and reads everything from that pinned ` +
+        "revision, so every field in a result is internally consistent and citable. " +
         "Every result includes source_revision, the exact commit SHA of " +
         `${env.SOURCE_REF} the answer was read from (see get_corpus_revision for ` +
         "just the revision). " +
@@ -86,16 +88,16 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
       },
     },
     async ({ status, initiative, format }) => {
-      const manifest = await getManifest(env, ctx);
+      const sha = await getSourceRevision(env, ctx);
+      const manifest = await getManifest(env, ctx, sha);
       let resources = manifest.resources;
       resources = resources.filter((r) => r.status === (status ?? "current"));
       if (initiative) resources = resources.filter((r) => r.initiative === initiative);
       if (format) resources = resources.filter((r) => r.format === format);
-      const source_revision = await getSourceRevision(env, ctx);
       return json({
         count: resources.length,
         resources: resources.map(resourceSummary),
-        source_revision,
+        source_revision: sha,
       });
     },
   );
@@ -112,7 +114,8 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
       inputSchema: {},
     },
     async () => {
-      const manifest = await getManifest(env, ctx);
+      const sha = await getSourceRevision(env, ctx);
+      const manifest = await getManifest(env, ctx, sha);
       const counts = new Map<string, { current: number; total: number }>();
       for (const r of manifest.resources) {
         const c = counts.get(r.initiative) ?? { current: 0, total: 0 };
@@ -148,7 +151,8 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
       },
     },
     async ({ id }) => {
-      const manifest = await getManifest(env, ctx);
+      const sha = await getSourceRevision(env, ctx);
+      const manifest = await getManifest(env, ctx, sha);
       const resource = manifest.resources.find((r) => r.id === id);
       if (!resource) {
         return errorResult(
@@ -157,33 +161,31 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
       }
 
       if (resource.status === "linked" || !resource.path) {
-        const source_revision = await getSourceRevision(env, ctx);
         return json({
           ...resourceSummary(resource),
           vendored: false,
           source_url: resource.source_url,
           source_repo: resource.source_repo,
-          source_revision,
+          source_revision: sha,
         });
       }
 
-      const tree = await getTree(env, ctx);
-      const source_revision = await getSourceRevision(env, ctx);
+      const tree = await getTree(env, ctx, sha);
       const files = filesUnderPath(resource.path, tree);
       const treePaths = new Set(tree.filter((e) => e.type === "blob").map((e) => e.path));
       return json({
         ...resourceSummary(resource),
         vendored: true,
-        source_revision,
+        source_revision: sha,
         files: files.map((path) => {
           const extractedPath = extractedTextPath(path);
           const hasExtract = extractedPath !== null && treePaths.has(extractedPath);
           return {
             path,
-            raw_url: rawUrl(path, env),
+            raw_url: rawUrl(path, env, sha),
             readable_via_get_file: isReadablePath(path),
             ...(hasExtract && {
-              text_extract_url: rawUrl(extractedPath as string, env),
+              text_extract_url: rawUrl(extractedPath as string, env, sha),
               text_extract_warning:
                 "Unreviewed automated extraction for search/skimming only -- not citable, use raw_url for anything that needs to be accurate.",
             }),
@@ -216,16 +218,16 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
             "Use get_resource to find its raw_url and fetch it directly.",
         );
       }
-      const tree = await getTree(env, ctx);
+      const sha = await getSourceRevision(env, ctx);
+      const tree = await getTree(env, ctx, sha);
       const exists = tree.some((e) => e.type === "blob" && e.path === path);
       if (!exists) {
         return errorResult(`'${path}' was not found in ${env.SOURCE_REPO}@${env.SOURCE_REF}.`);
       }
-      const text = await fetchRawFile(path, env, ctx);
-      const source_revision = await getSourceRevision(env, ctx);
+      const text = await fetchRawFile(path, env, ctx, sha);
       return {
         content: [{ type: "text" as const, text }],
-        structuredContent: { source_revision },
+        structuredContent: { source_revision: sha },
       };
     },
   );
@@ -250,7 +252,8 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
       },
     },
     async ({ query, status }) => {
-      const manifest = await getManifest(env, ctx);
+      const sha = await getSourceRevision(env, ctx);
+      const manifest = await getManifest(env, ctx, sha);
       const needle = query.toLowerCase();
       const targetStatus = status ?? "current";
       const resources = manifest.resources.filter((r) => r.status === targetStatus);
@@ -264,7 +267,7 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
         warning?: string;
       }> = [];
 
-      const tree = await getTree(env, ctx);
+      const tree = await getTree(env, ctx, sha);
       const treePaths = new Set(tree.filter((e) => e.type === "blob").map((e) => e.path));
       const EXTRACT_WARNING =
         "From an unreviewed automated PDF text extraction -- for locating the right document only, do not quote; fetch the source PDF via get_resource for accurate text.";
@@ -292,7 +295,7 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
             if (matches.length >= MAX_SEARCH_MATCHES) break;
             let text: string;
             try {
-              text = await fetchRawFile(file, env, ctx);
+              text = await fetchRawFile(file, env, ctx, sha);
             } catch {
               continue;
             }
@@ -320,7 +323,7 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
             if (!extractedPath || !treePaths.has(extractedPath)) continue;
             let text: string;
             try {
-              text = await fetchRawFile(extractedPath, env, ctx);
+              text = await fetchRawFile(extractedPath, env, ctx, sha);
             } catch {
               continue;
             }
@@ -344,7 +347,7 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
         status: targetStatus,
         count: matches.length,
         matches,
-        source_revision: await getSourceRevision(env, ctx),
+        source_revision: sha,
       });
     },
   );
