@@ -82,7 +82,6 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
       },
       annotations: {
         readOnlyHint: true,
-        idempotentHint: true,
         openWorldHint: false,
       },
     },
@@ -108,7 +107,6 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
       inputSchema: {},
       annotations: {
         readOnlyHint: true,
-        idempotentHint: true,
         openWorldHint: false,
       },
     },
@@ -149,7 +147,6 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
       },
       annotations: {
         readOnlyHint: true,
-        idempotentHint: true,
         openWorldHint: false,
       },
     },
@@ -209,7 +206,6 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
       },
       annotations: {
         readOnlyHint: true,
-        idempotentHint: true,
         openWorldHint: false,
       },
     },
@@ -253,7 +249,6 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
       },
       annotations: {
         readOnlyHint: true,
-        idempotentHint: true,
         openWorldHint: false,
       },
     },
