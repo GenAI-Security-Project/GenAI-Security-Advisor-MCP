@@ -105,12 +105,27 @@ export async function getManifest(
   if (!data || !Array.isArray(data.resources)) {
     throw new Error("MANIFEST.yaml did not parse to the expected { resources: [...] } shape");
   }
+  // Validate the shape before trusting it: a malformed entry would otherwise
+  // surface as undefined fields or silent filter misses downstream.
+  for (const r of data.resources) {
+    if (!r || typeof r.id !== "string" || typeof r.title !== "string") {
+      throw new Error("MANIFEST.yaml contains a resource entry missing id/title");
+    }
+  }
   return data;
 }
 
 // Resolves SOURCE_REF to the exact commit SHA currently serving the corpus.
 // This is the citation anchor: two consumers hitting the same revision see
 // the same bytes, and an answer can name the commit it was read from.
+//
+// Failure policy: FAIL-CLOSED, deliberately. If the commits API is
+// rate-limited or 5xx, this throws and the tool returns an error rather than
+// serving content that cannot be pinned to a revision -- answering without a
+// resolved SHA would silently break the citation contract. The resolve is
+// cached (CACHE_TTL_SECONDS), so at most one commits-API call per 5 minutes
+// per worker instance; fail-closed therefore costs availability only during
+// a sustained API outage, and never serves an unpinned answer.
 export async function getSourceRevision(env: Env, ctx: ExecutionContext): Promise<string> {
   const url = `https://api.github.com/repos/${env.SOURCE_REPO}/commits/${env.SOURCE_REF}`;
   const resp = await cachedFetch(url, { headers: ghHeaders(env, "application/vnd.github+json") }, ctx);
@@ -141,6 +156,13 @@ export async function getTree(
     throw new Error(`Failed to fetch repo tree: ${resp.status} ${resp.statusText}`);
   }
   const data = (await resp.json()) as { tree: TreeEntry[]; truncated?: boolean };
+  // GitHub's recursive trees API caps at 100k entries and silently sets
+  // truncated: true. A truncated tree would make get_file report valid files
+  // as "not found" and get_resource emit incomplete file lists -- fail closed
+  // instead of serving a partial listing as if it were complete.
+  if (data.truncated) {
+    throw new Error("Repo tree exceeds GitHub's recursive API limit (truncated); refusing to serve a partial file listing");
+  }
   return data.tree;
 }
 
@@ -149,11 +171,16 @@ export function isReadablePath(path: string): boolean {
 }
 
 // Rejects anything that isn't a plain, forward-relative path under corpus/.
-// No "..", no absolute paths, no protocol-relative tricks.
+// No "..", no absolute paths, no protocol-relative tricks, no backslashes
+// (Windows separators), no URL-encoded characters (%2e%2e is ".." once a
+// server decodes it), and no control characters. Corpus paths are plain
+// file paths -- anything needing encoding is a caller mistake.
 export function isSafeCorpusPath(path: string): boolean {
   if (!path.startsWith("corpus/")) return false;
   if (path.includes("..")) return false;
   if (path.startsWith("/") || path.includes("://")) return false;
+  if (path.includes("\\") || path.includes("%")) return false;
+  if (/[\u0000-\u001f\u007f]/.test(path)) return false;
   return true;
 }
 
@@ -163,7 +190,7 @@ export async function fetchRawFile(
   ctx: ExecutionContext,
   ref: string,
 ): Promise<string> {
-  const url = `https://raw.githubusercontent.com/${env.SOURCE_REPO}/${ref}/${path}`;
+  const url = `https://raw.githubusercontent.com/${env.SOURCE_REPO}/${ref}/${encodePath(path)}`;
   const resp = await cachedFetch(
     url,
     { headers: ghHeaders(env, "text/plain") },
@@ -188,8 +215,18 @@ export function filesUnderPath(path: string, tree: TreeEntry[]): string[] {
     .sort();
 }
 
+// Corpus paths are repo-relative and may contain spaces or other characters
+// that need percent-encoding in a URL. Encode per segment so slashes survive
+// and nothing else does; matches how GitHub itself serves these files.
+export function encodePath(path: string): string {
+  return path
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+}
+
 export function rawUrl(path: string, env: Env, ref: string): string {
-  return `https://raw.githubusercontent.com/${env.SOURCE_REPO}/${ref}/${path}`;
+  return `https://raw.githubusercontent.com/${env.SOURCE_REPO}/${ref}/${encodePath(path)}`;
 }
 
 // Mirrors scripts/extract_pdf_text.py's naming convention in the source repo:

@@ -128,11 +128,15 @@ The MCP Server provides several tools that your AI assistant can use automatical
 | `get_file` | Reads supported research files |
 | `get_corpus_revision` | Returns the exact commit SHA the server is currently serving answers from |
 
-Every result that carries research content (`list_resources`, `get_resource`,
-`get_file`, `search_corpus`) includes a `source_revision` field: the exact
-commit SHA of the source repo ref the answer was read from, so a consumer can
-record which revision answered a request (and `get_corpus_revision` returns
-the same value on its own, with a commit URL).
+Every tool result includes a `source_revision` field: the exact commit SHA of
+the source repo ref the answer was read from, so a consumer can record which
+revision answered a request (`get_corpus_revision` returns the same value on
+its own, with a commit URL).
+
+If the revision cannot be resolved (e.g. the GitHub API is rate-limited or
+unavailable), the server **fails closed** — it returns an error rather than
+serving content that cannot be pinned to a revision. Resolves are cached for
+five minutes, so this only surfaces during a sustained API outage.
 
 In most cases, **you do not need to invoke these tools manually**.
 

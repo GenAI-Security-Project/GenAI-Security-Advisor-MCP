@@ -54,7 +54,9 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
         "revision, so every field in a result is internally consistent and citable. " +
         "Every result includes source_revision, the exact commit SHA of " +
         `${env.SOURCE_REF} the answer was read from (see get_corpus_revision for ` +
-        "just the revision). " +
+        "just the revision). If the revision cannot be resolved (e.g. GitHub API " +
+        "rate limit or outage), the server fails closed and returns an error " +
+        "rather than serving content that cannot be pinned to a revision. " +
         "Start with list_resources or list_initiatives, then get_resource for a specific " +
         "document's metadata and file list, get_file to read a specific text file's " +
         "contents, or search_corpus for a keyword search across markdown/JSON resources. " +
@@ -123,11 +125,12 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
         if (r.status === "current") c.current += 1;
         counts.set(r.initiative, c);
       }
-      return json(
-        Array.from(counts.entries())
+      return json({
+        source_revision: sha,
+        initiatives: Array.from(counts.entries())
           .sort(([a], [b]) => a.localeCompare(b))
           .map(([initiative, c]) => ({ initiative, ...c })),
-      );
+      });
     },
   );
 
@@ -171,8 +174,11 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
       }
 
       const tree = await getTree(env, ctx, sha);
-      const files = filesUnderPath(resource.path, tree);
       const treePaths = new Set(tree.filter((e) => e.type === "blob").map((e) => e.path));
+      // Only report files that actually exist in the pinned tree. A manifest
+      // path that drifted out of the repo (or a single-file resource whose
+      // path isn't a blob) would otherwise produce raw_urls that 404.
+      const files = filesUnderPath(resource.path, tree).filter((path) => treePaths.has(path));
       return json({
         ...resourceSummary(resource),
         vendored: true,
@@ -364,6 +370,10 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
         "the same source_revision field, so this is only needed when you want the revision " +
         "without a resource lookup or search.",
       inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+      },
     },
     async () => {
       const sha = await getSourceRevision(env, ctx);
