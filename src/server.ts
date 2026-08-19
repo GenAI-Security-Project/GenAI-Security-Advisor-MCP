@@ -216,7 +216,7 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
     },
     async ({ path }) => {
       if (!isSafeCorpusPath(path)) {
-        return errorResult("Invalid path: must be a repo-relative path under corpus/ with no '..' segments.");
+        return errorResult("Invalid path: must be a plain repo-relative path under corpus/ with no '..' segments, no absolute or protocol-relative forms, no backslashes, no percent-encoded characters, and no control characters.");
       }
       if (!isReadablePath(path)) {
         return errorResult(
