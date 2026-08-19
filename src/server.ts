@@ -7,6 +7,7 @@ import {
   fetchRawFile,
   filesUnderPath,
   getManifest,
+  getSourceRevision,
   getTree,
   isReadablePath,
   isSafeCorpusPath,
@@ -48,7 +49,14 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
       instructions:
         "Browses the OWASP GenAI Security Project's curated corpus (companion to the " +
         "genai-security-advisor skill). All content is read live from the " +
-        `${env.SOURCE_REPO} GitHub repo at query time, edge-cached for up to an hour. ` +
+        `${env.SOURCE_REPO} GitHub repo at query time. Each request resolves ` +
+        `${env.SOURCE_REF} to a commit SHA once and reads everything from that pinned ` +
+        "revision, so every field in a result is internally consistent and citable. " +
+        "Every result includes source_revision, the exact commit SHA of " +
+        `${env.SOURCE_REF} the answer was read from (see get_corpus_revision for ` +
+        "just the revision). If the revision cannot be resolved (e.g. GitHub API " +
+        "rate limit or outage), the server fails closed and returns an error " +
+        "rather than serving content that cannot be pinned to a revision. " +
         "Start with list_resources or list_initiatives, then get_resource for a specific " +
         "document's metadata and file list, get_file to read a specific text file's " +
         "contents, or search_corpus for a keyword search across markdown/JSON resources. " +
@@ -82,12 +90,17 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
       },
     },
     async ({ status, initiative, format }) => {
-      const manifest = await getManifest(env, ctx);
+      const sha = await getSourceRevision(env, ctx);
+      const manifest = await getManifest(env, ctx, sha);
       let resources = manifest.resources;
       resources = resources.filter((r) => r.status === (status ?? "current"));
       if (initiative) resources = resources.filter((r) => r.initiative === initiative);
       if (format) resources = resources.filter((r) => r.format === format);
-      return json({ count: resources.length, resources: resources.map(resourceSummary) });
+      return json({
+        count: resources.length,
+        resources: resources.map(resourceSummary),
+        source_revision: sha,
+      });
     },
   );
 
@@ -103,7 +116,8 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
       inputSchema: {},
     },
     async () => {
-      const manifest = await getManifest(env, ctx);
+      const sha = await getSourceRevision(env, ctx);
+      const manifest = await getManifest(env, ctx, sha);
       const counts = new Map<string, { current: number; total: number }>();
       for (const r of manifest.resources) {
         const c = counts.get(r.initiative) ?? { current: 0, total: 0 };
@@ -111,11 +125,12 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
         if (r.status === "current") c.current += 1;
         counts.set(r.initiative, c);
       }
-      return json(
-        Array.from(counts.entries())
+      return json({
+        source_revision: sha,
+        initiatives: Array.from(counts.entries())
           .sort(([a], [b]) => a.localeCompare(b))
           .map(([initiative, c]) => ({ initiative, ...c })),
-      );
+      });
     },
   );
 
@@ -139,7 +154,8 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
       },
     },
     async ({ id }) => {
-      const manifest = await getManifest(env, ctx);
+      const sha = await getSourceRevision(env, ctx);
+      const manifest = await getManifest(env, ctx, sha);
       const resource = manifest.resources.find((r) => r.id === id);
       if (!resource) {
         return errorResult(
@@ -153,24 +169,29 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
           vendored: false,
           source_url: resource.source_url,
           source_repo: resource.source_repo,
+          source_revision: sha,
         });
       }
 
-      const tree = await getTree(env, ctx);
-      const files = filesUnderPath(resource.path, tree);
+      const tree = await getTree(env, ctx, sha);
       const treePaths = new Set(tree.filter((e) => e.type === "blob").map((e) => e.path));
+      // Only report files that actually exist in the pinned tree. A manifest
+      // path that drifted out of the repo (or a single-file resource whose
+      // path isn't a blob) would otherwise produce raw_urls that 404.
+      const files = filesUnderPath(resource.path, tree).filter((path) => treePaths.has(path));
       return json({
         ...resourceSummary(resource),
         vendored: true,
+        source_revision: sha,
         files: files.map((path) => {
           const extractedPath = extractedTextPath(path);
           const hasExtract = extractedPath !== null && treePaths.has(extractedPath);
           return {
             path,
-            raw_url: rawUrl(path, env),
+            raw_url: rawUrl(path, env, sha),
             readable_via_get_file: isReadablePath(path),
             ...(hasExtract && {
-              text_extract_url: rawUrl(extractedPath as string, env),
+              text_extract_url: rawUrl(extractedPath as string, env, sha),
               text_extract_warning:
                 "Unreviewed automated extraction for search/skimming only -- not citable, use raw_url for anything that needs to be accurate.",
             }),
@@ -195,7 +216,7 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
     },
     async ({ path }) => {
       if (!isSafeCorpusPath(path)) {
-        return errorResult("Invalid path: must be a repo-relative path under corpus/ with no '..' segments.");
+        return errorResult("Invalid path: must be a plain repo-relative path under corpus/ with no '..' segments, no absolute or protocol-relative forms, no backslashes, no percent-encoded characters, and no control characters.");
       }
       if (!isReadablePath(path)) {
         return errorResult(
@@ -203,13 +224,17 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
             "Use get_resource to find its raw_url and fetch it directly.",
         );
       }
-      const tree = await getTree(env, ctx);
+      const sha = await getSourceRevision(env, ctx);
+      const tree = await getTree(env, ctx, sha);
       const exists = tree.some((e) => e.type === "blob" && e.path === path);
       if (!exists) {
         return errorResult(`'${path}' was not found in ${env.SOURCE_REPO}@${env.SOURCE_REF}.`);
       }
-      const text = await fetchRawFile(path, env, ctx);
-      return { content: [{ type: "text" as const, text }] };
+      const text = await fetchRawFile(path, env, ctx, sha);
+      return {
+        content: [{ type: "text" as const, text }],
+        structuredContent: { source_revision: sha },
+      };
     },
   );
 
@@ -233,7 +258,8 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
       },
     },
     async ({ query, status }) => {
-      const manifest = await getManifest(env, ctx);
+      const sha = await getSourceRevision(env, ctx);
+      const manifest = await getManifest(env, ctx, sha);
       const needle = query.toLowerCase();
       const targetStatus = status ?? "current";
       const resources = manifest.resources.filter((r) => r.status === targetStatus);
@@ -247,7 +273,7 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
         warning?: string;
       }> = [];
 
-      const tree = await getTree(env, ctx);
+      const tree = await getTree(env, ctx, sha);
       const treePaths = new Set(tree.filter((e) => e.type === "blob").map((e) => e.path));
       const EXTRACT_WARNING =
         "From an unreviewed automated PDF text extraction -- for locating the right document only, do not quote; fetch the source PDF via get_resource for accurate text.";
@@ -275,7 +301,7 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
             if (matches.length >= MAX_SEARCH_MATCHES) break;
             let text: string;
             try {
-              text = await fetchRawFile(file, env, ctx);
+              text = await fetchRawFile(file, env, ctx, sha);
             } catch {
               continue;
             }
@@ -303,7 +329,7 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
             if (!extractedPath || !treePaths.has(extractedPath)) continue;
             let text: string;
             try {
-              text = await fetchRawFile(extractedPath, env, ctx);
+              text = await fetchRawFile(extractedPath, env, ctx, sha);
             } catch {
               continue;
             }
@@ -322,7 +348,41 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
         }
       }
 
-      return json({ query, status: targetStatus, count: matches.length, matches });
+      return json({
+        query,
+        status: targetStatus,
+        count: matches.length,
+        matches,
+        source_revision: sha,
+      });
+    },
+  );
+
+  server.registerTool(
+    "get_corpus_revision",
+    {
+      title: "Get the exact corpus revision",
+      description:
+        "Return the exact commit SHA of the source repo ref (SOURCE_REF) that this server " +
+        "is currently serving answers from, with a GitHub URL for the commit. Use this to " +
+        "record which revision a claim or answer was read from, or to detect when the " +
+        "served corpus has changed between calls. Every other tool's result also carries " +
+        "the same source_revision field, so this is only needed when you want the revision " +
+        "without a resource lookup or search.",
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => {
+      const sha = await getSourceRevision(env, ctx);
+      return json({
+        source_repo: env.SOURCE_REPO,
+        source_ref: env.SOURCE_REF,
+        source_revision: sha,
+        commit_url: `https://github.com/${env.SOURCE_REPO}/commit/${sha}`,
+      });
     },
   );
 
