@@ -134,7 +134,7 @@ revision answered a request (`get_corpus_revision` returns the same value on
 its own, with a commit URL).
 
 If the revision cannot be resolved (e.g. the GitHub API is rate-limited or
-unavailable), the server **fails closed** — it returns an error rather than
+unavailable), the server **fails closed**: it returns an error rather than
 serving content that cannot be pinned to a revision. Resolves are cached for
 five minutes, so this only surfaces during a sustained API outage.
 
