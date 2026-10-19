@@ -23,7 +23,7 @@ const INFO_BODY = JSON.stringify(
     protocol: "Model Context Protocol (Streamable HTTP, stateless)",
     mcp_endpoint: "/mcp",
     repo: "https://github.com/GenAI-Security-Project/GenAI-Security-Advisor-MCP",
-    corpus_source: "https://github.com/GenAI-Security-Project/GenAI-Security-Advisor",
+    corpus_source: "https://github.com/GenAI-Security-Project/GenAI-Security-Corpus",
     license: "Apache-2.0 (this server's code -- vendored corpus content keeps its own license, see each resource)",
   },
   null,
