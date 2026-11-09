@@ -40,6 +40,15 @@ interface TreeEntry {
   size?: number;
 }
 
+// A tree listing plus the identity of the revision it was read from. GitHub's
+// trees API resolves SOURCE_REF ("main") to a tree object and returns that
+// object's sha beside the entries; keeping it is the only thing that lets a
+// caller say which corpus state answered a request.
+export interface TreeSnapshot {
+  sha: string;
+  entries: TreeEntry[];
+}
+
 // Balances corpus-update propagation speed against GitHub's unauthenticated
 // 60 req/hour rate limit (per source IP; Workers' egress IPs vary by colo,
 // so this is comfortably inside budget even at low-to-moderate traffic).
@@ -98,14 +107,14 @@ export async function getManifest(env: Env, ctx: ExecutionContext): Promise<Mani
 // resource's directory and to validate get_file requests (a path is only
 // readable if it's actually in this tree -- prevents path traversal /
 // fetching arbitrary paths outside corpus/).
-export async function getTree(env: Env, ctx: ExecutionContext): Promise<TreeEntry[]> {
+export async function getTree(env: Env, ctx: ExecutionContext): Promise<TreeSnapshot> {
   const url = `https://api.github.com/repos/${env.SOURCE_REPO}/git/trees/${env.SOURCE_REF}?recursive=1`;
   const resp = await cachedFetch(url, { headers: ghHeaders(env, "application/vnd.github+json") }, ctx);
   if (!resp.ok) {
     throw new Error(`Failed to fetch repo tree: ${resp.status} ${resp.statusText}`);
   }
-  const data = (await resp.json()) as { tree: TreeEntry[]; truncated?: boolean };
-  return data.tree;
+  const data = (await resp.json()) as { tree: TreeEntry[]; sha?: string; truncated?: boolean };
+  return { sha: data.sha ?? "", entries: data.tree };
 }
 
 export function isReadablePath(path: string): boolean {

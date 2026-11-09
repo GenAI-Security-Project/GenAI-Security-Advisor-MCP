@@ -48,7 +48,7 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
       instructions:
         "Browses the OWASP GenAI Security Project's curated corpus (companion to the " +
         "genai-security-advisor skill). All content is read live from the " +
-        `${env.SOURCE_REPO} GitHub repo at query time, edge-cached for up to an hour. ` +
+        `${env.SOURCE_REPO} GitHub repo at query time, edge-cached for up to five minutes. ` +
         "Start with list_resources or list_initiatives, then get_resource for a specific " +
         "document's metadata and file list, get_file to read a specific text file's " +
         "contents, or search_corpus for a keyword search across markdown/JSON resources. " +
@@ -87,11 +87,16 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
     },
     async ({ status, initiative, format }) => {
       const manifest = await getManifest(env, ctx);
+      const { sha: corpusRevision } = await getTree(env, ctx);
       let resources = manifest.resources;
       resources = resources.filter((r) => r.status === (status ?? "current"));
       if (initiative) resources = resources.filter((r) => r.initiative === initiative);
       if (format) resources = resources.filter((r) => r.format === format);
-      return json({ count: resources.length, resources: resources.map(resourceSummary) });
+      return json({
+        count: resources.length,
+        corpus_revision: corpusRevision,
+        resources: resources.map(resourceSummary),
+      });
     },
   );
 
@@ -168,12 +173,13 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
         });
       }
 
-      const tree = await getTree(env, ctx);
+      const { sha: corpusRevision, entries: tree } = await getTree(env, ctx);
       const files = filesUnderPath(resource.path, tree);
       const treePaths = new Set(tree.filter((e) => e.type === "blob").map((e) => e.path));
       return json({
         ...resourceSummary(resource),
         vendored: true,
+        corpus_revision: corpusRevision,
         files: files.map((path) => {
           const extractedPath = extractedTextPath(path);
           const hasExtract = extractedPath !== null && treePaths.has(extractedPath);
@@ -219,7 +225,7 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
             "Use get_resource to find its raw_url and fetch it directly.",
         );
       }
-      const tree = await getTree(env, ctx);
+      const { entries: tree } = await getTree(env, ctx);
       const exists = tree.some((e) => e.type === "blob" && e.path === path);
       if (!exists) {
         return errorResult(`'${path}' was not found in ${env.SOURCE_REPO}@${env.SOURCE_REF}.`);
@@ -267,7 +273,7 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
         warning?: string;
       }> = [];
 
-      const tree = await getTree(env, ctx);
+      const { sha: corpusRevision, entries: tree } = await getTree(env, ctx);
       const treePaths = new Set(tree.filter((e) => e.type === "blob").map((e) => e.path));
       const EXTRACT_WARNING =
         "From an unreviewed automated PDF text extraction -- for locating the right document only, do not quote; fetch the source PDF via get_resource for accurate text.";
@@ -342,7 +348,7 @@ export function buildServer(env: Env, ctx: ExecutionContext): McpServer {
         }
       }
 
-      return json({ query, status: targetStatus, count: matches.length, matches });
+      return json({ query, status: targetStatus, corpus_revision: corpusRevision, count: matches.length, matches });
     },
   );
 
